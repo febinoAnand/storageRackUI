@@ -90,9 +90,10 @@
             <option value="in_use">In Use only</option>
             <option value="removed">Removed only</option>
           </select>
-          <select id="logFilterRack">
-            <option value="all">All Storages</option>
-          </select>
+          <div class="type-search">
+            <input type="text" id="logFilterRackSearch" placeholder="All Storages" autocomplete="off">
+            <div class="item-picker-dropdown type-search-dropdown" id="logFilterRackDropdown" hidden></div>
+          </div>
           <label class="date-filter-field">
             <span>From</span>
             <input type="date" id="logFilterFrom">

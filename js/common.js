@@ -89,6 +89,54 @@ function typeInfo(type) {
   return STORAGE_TYPES[type] || STORAGE_TYPES.custom;
 }
 
+// A storage's displayed type label — for type "custom" with a customType
+// set, that's the user's own text (e.g. "Safe") instead of the generic
+// "Custom" bucket label.
+function rackTypeLabel(rack) {
+  if (rack.type === "custom" && rack.customType && rack.customType.trim()) {
+    return rack.customType.trim();
+  }
+  return typeInfo(rack.type).label;
+}
+
+// A stable key for filtering/grouping by type: built-in types use their own
+// enum key; "Custom" storages are keyed by their own label (case-insensitive)
+// so each distinct custom type can be filtered separately instead of every
+// custom storage being lumped into one generic "Custom" bucket.
+function rackTypeKey(rack) {
+  if (rack.type === "custom" && rack.customType && rack.customType.trim()) {
+    return "custom:" + rack.customType.trim().toLowerCase();
+  }
+  return rack.type;
+}
+
+// Builds the {value, label} option list for a Type filter/search combobox:
+// every built-in type, plus each distinct custom label actually in use among
+// current racks (so the list — and what's searchable — reflects real data,
+// not just the fixed enum), alphabetized by label.
+function rackTypeFilterOptions() {
+  const seen = {};
+  const options = [];
+  Object.keys(STORAGE_TYPES).forEach(function (key) {
+    if (key === "custom") return; // replaced below by the actual custom labels in use
+    options.push({ value: key, label: STORAGE_TYPES[key].label });
+    seen[key] = true;
+  });
+  let hasBareCustom = false;
+  racks.forEach(function (r) {
+    if (r.type !== "custom") return;
+    const label = (r.customType || "").trim();
+    if (!label) { hasBareCustom = true; return; }
+    const key = rackTypeKey(r);
+    if (seen[key]) return;
+    seen[key] = true;
+    options.push({ value: key, label: label });
+  });
+  if (hasBareCustom) options.push({ value: "custom", label: "Custom" });
+  options.sort(function (a, b) { return a.label.localeCompare(b.label); });
+  return options;
+}
+
 // Unique, human-readable alphanumeric code for a compartment (level/shelf/drawer/section/etc.), e.g. "CM-1001".
 // Kept for any legacy compartment data created before storages became flat.
 const NODE_CODE_SEQ_KEY = "srNodeCodeSeqV1";
@@ -443,7 +491,10 @@ function activeGlobalItemsForRack(rackId) {
 const ITEM_STATUS_LABELS = { in_store: "In Store", in_use: "In Use", removed: "Removed" };
 const ITEM_STATUS_BADGE_CLASS = { in_store: "", in_use: "warning", removed: "neutral" };
 
-function itemStatusBadgeHtml(status) {
+function itemStatusBadgeHtml(status, unassigned) {
+  if (unassigned) {
+    return `<span class="rack-badge neutral">Unassigned</span>`;
+  }
   const cls = ITEM_STATUS_BADGE_CLASS[status] || "";
   const label = ITEM_STATUS_LABELS[status] || status;
   return `<span class="rack-badge ${cls}">${escapeHtml(label)}</span>`;
@@ -583,7 +634,10 @@ function openQuickAddStorageModal(onCreated) {
         <div class="field-group">
           <div class="field">
             <label>Type <span class="req">*</span></label>
-            <select class="qa-storage-type" required></select>
+            <div class="type-search">
+              <input type="text" class="qa-storage-type-search" placeholder="Select a type" autocomplete="off" required>
+              <div class="item-picker-dropdown type-search-dropdown qa-storage-type-dropdown" hidden></div>
+            </div>
             <p class="field-hint qa-storage-type-hint"></p>
           </div>
           <div class="field">
@@ -593,6 +647,11 @@ function openQuickAddStorageModal(onCreated) {
               <button type="button" class="btn-secondary qa-storage-room-add" title="Add a new location">+ New</button>
             </div>
           </div>
+        </div>
+        <div class="field qa-storage-custom-type-field" hidden>
+          <label>Custom Type Name <span class="req">*</span></label>
+          <input type="text" class="qa-storage-custom-type" placeholder="e.g. Safe, Drawer Unit">
+          <p class="field-hint">Shown everywhere this storage's type is displayed, instead of the generic "Custom" label.</p>
         </div>
         <div class="field">
           <label>Tags</label>
@@ -634,14 +693,34 @@ function openQuickAddStorageModal(onCreated) {
   `;
   document.body.appendChild(overlay);
 
-  const typeSelect = overlay.querySelector(".qa-storage-type");
-  typeSelect.innerHTML = Object.keys(STORAGE_TYPES).map(function (key) {
-    return `<option value="${escapeHtml(key)}">${escapeHtml(STORAGE_TYPES[key].label)}</option>`;
-  }).join("");
+  let qaSelectedType = Object.keys(STORAGE_TYPES)[0];
+  const typeInput = overlay.querySelector(".qa-storage-type-search");
+  const typeDropdown = overlay.querySelector(".qa-storage-type-dropdown");
+  function storageTypeOptions() {
+    return Object.keys(STORAGE_TYPES).map(function (key) {
+      return { value: key, label: STORAGE_TYPES[key].label };
+    });
+  }
+
   const typeHintEl = overlay.querySelector(".qa-storage-type-hint");
-  function syncTypeHint() { typeHintEl.textContent = QA_STORAGE_TYPE_HINTS[typeSelect.value] || ""; }
-  typeSelect.addEventListener("change", syncTypeHint);
+  function syncTypeHint() { typeHintEl.textContent = QA_STORAGE_TYPE_HINTS[qaSelectedType] || ""; }
+
+  const customTypeField = overlay.querySelector(".qa-storage-custom-type-field");
+  const customTypeInput = overlay.querySelector(".qa-storage-custom-type");
+  function syncCustomTypeField() {
+    const isCustom = qaSelectedType === "custom";
+    customTypeField.hidden = !isCustom;
+    if (!isCustom) customTypeInput.value = "";
+  }
+
+  createSearchableSelect(typeInput, typeDropdown, storageTypeOptions, function (value) {
+    qaSelectedType = value;
+    syncTypeHint();
+    syncCustomTypeField();
+  });
+  typeInput.value = STORAGE_TYPES[qaSelectedType].label;
   syncTypeHint();
+  syncCustomTypeField();
 
   const roomSelect = overlay.querySelector(".qa-storage-room");
   function refreshRoomSelect(selectedId) {
@@ -745,12 +824,18 @@ function openQuickAddStorageModal(onCreated) {
     e.preventDefault();
     const id = overlay.querySelector(".qa-storage-id").value.trim();
     const name = overlay.querySelector(".qa-storage-name").value.trim();
-    const type = typeSelect.value;
+    const type = qaSelectedType;
+    const customType = customTypeInput.value.trim();
     const storeRoomId = roomSelect.value;
     const errorEl = overlay.querySelector(".qa-storage-error");
 
     if (!id || !name || !type || !storeRoomId) {
       errorEl.textContent = "Please fill in the storage ID, name, type, and location.";
+      errorEl.hidden = false;
+      return;
+    }
+    if (type === "custom" && !customType) {
+      errorEl.textContent = "Please specify what this custom storage type is.";
       errorEl.hidden = false;
       return;
     }
@@ -762,6 +847,7 @@ function openQuickAddStorageModal(onCreated) {
 
     const rack = {
       id: id, name: name, storeRoomId: storeRoomId, type: type,
+      customType: type === "custom" ? customType : "",
       tags: qaTagInput.getTags(), images: qaImageInput.getImages(),
       nodes: [], createdAt: Date.now(),
     };
@@ -1513,9 +1599,9 @@ function createImageInput(previewsEl, fileEl, options) {
   };
 }
 
-function typeBadgeHtml(type) {
-  const t = typeInfo(type);
-  return `<span class="type-badge"><span class="badge-icon">${t.icon}</span>${t.label}</span>`;
+function typeBadgeHtml(rack) {
+  const t = typeInfo(rack.type);
+  return `<span class="type-badge"><span class="badge-icon">${t.icon}</span>${escapeHtml(rackTypeLabel(rack))}</span>`;
 }
 
 function buildItemsPreviewHtml(items) {
@@ -1582,7 +1668,7 @@ function buildRackCard(rack) {
     </div>
     <div class="rack-location"><span class="inline-icon">${ICONS.door}</span> ${escapeHtml(roomLabel(rack.storeRoomId))}</div>
     <div class="rack-sub-meta">
-      ${typeBadgeHtml(rack.type)}
+      ${typeBadgeHtml(rack)}
       ${rackCardTagsHtml(tags)}
     </div>
     ${buildItemsPreviewHtml(collectAllItems(rack).concat(activeGlobalItemsForRack(rack.id)))}
@@ -1621,7 +1707,7 @@ function buildRackRow(rack) {
     <span class="rack-row-name">${escapeHtml(rack.name)}</span>
     <span class="rack-row-loc">${escapeHtml(roomLabel(rack.storeRoomId))}</span>
     <div class="rack-row-progress">
-      ${typeBadgeHtml(rack.type)}
+      ${typeBadgeHtml(rack)}
     </div>
     <div class="rack-row-meta">
       <span><strong>${totalItems}</strong> items</span>
@@ -1671,7 +1757,7 @@ function openEditModal(rack) {
   document.getElementById("editRackForm").reset();
   editingRackId = rack.id;
   document.getElementById("editRackId").value = rack.id;
-  document.getElementById("editRackType").value = typeInfo(rack.type).label;
+  document.getElementById("editRackType").value = rackTypeLabel(rack);
   document.getElementById("editRackName").value = rack.name;
   document.getElementById("editRackRoom").innerHTML = roomOptionsHtml(rack.storeRoomId);
   editTagInput = createTagInput(document.getElementById("editRackTagChips"), document.getElementById("editRackTagText"), rackTags(rack));
@@ -1816,6 +1902,83 @@ function renderPagination(container, totalItems, currentPage, pageSize, onChange
       onChange(parseInt(btn.dataset.page, 10));
     });
   });
+}
+
+// ---------- Searchable dropdown select ----------
+// Turns a text input + an adjacent dropdown container into a type-to-filter
+// combobox: typing the first few letters narrows the option list live,
+// matching the same interaction pattern (type, arrow keys, Enter, Escape,
+// outside click) as the existing item-picker fields. `getOptions()` returns
+// the current full {value, label} list (called fresh each render, so it can
+// reflect live data); `onPick(value, label)` fires when an option is chosen.
+function createSearchableSelect(input, dropdown, getOptions, onPick) {
+  let highlightIndex = -1;
+
+  function syncHighlight() {
+    dropdown.querySelectorAll(".item-picker-option").forEach(function (opt, i) {
+      opt.classList.toggle("highlighted", i === highlightIndex);
+    });
+  }
+
+  function pick(value, label) {
+    input.value = label;
+    dropdown.hidden = true;
+    onPick(value, label);
+  }
+
+  function render() {
+    const query = input.value.trim().toLowerCase();
+    const options = getOptions().filter(function (o) {
+      return !query || o.label.toLowerCase().indexOf(query) !== -1;
+    });
+    highlightIndex = -1;
+
+    if (!options.length) {
+      dropdown.hidden = false;
+      dropdown.innerHTML = `<div class="item-picker-empty">No matching types.</div>`;
+      return;
+    }
+    dropdown.hidden = false;
+    dropdown.innerHTML = options.map(function (o) {
+      return `<div class="item-picker-option" data-value="${escapeHtml(o.value)}"><span>${escapeHtml(o.label)}</span></div>`;
+    }).join("");
+    dropdown.querySelectorAll(".item-picker-option").forEach(function (opt) {
+      // mousedown (not click) so this runs before the input's blur fires
+      opt.addEventListener("mousedown", function (e) {
+        e.preventDefault();
+        pick(opt.dataset.value, opt.querySelector("span").textContent);
+      });
+    });
+  }
+
+  input.addEventListener("input", render);
+  input.addEventListener("focus", render);
+  input.addEventListener("keydown", function (e) {
+    const opts = dropdown.hidden ? [] : Array.from(dropdown.querySelectorAll(".item-picker-option"));
+    if (!opts.length) return;
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      highlightIndex = (highlightIndex + 1) % opts.length;
+      syncHighlight();
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      highlightIndex = (highlightIndex - 1 + opts.length) % opts.length;
+      syncHighlight();
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      const opt = opts[highlightIndex >= 0 ? highlightIndex : 0];
+      pick(opt.dataset.value, opt.querySelector("span").textContent);
+    } else if (e.key === "Escape") {
+      dropdown.hidden = true;
+    }
+  });
+  document.addEventListener("click", function (e) {
+    if (e.target !== input && !dropdown.contains(e.target)) dropdown.hidden = true;
+  });
+
+  return {
+    setValue: function (value, label) { input.value = label; dropdown.hidden = true; },
+  };
 }
 
 // ---------- Animation helpers ----------
