@@ -294,7 +294,7 @@ function renderDetail() {
       <div class="stat-card">
         <div class="stat-icon c-blue">${ICONS.layers}</div>
         <div>
-          <div class="stat-value">${typeBadgeHtml(rack.type)}</div>
+          <div class="stat-value">${typeBadgeHtml(rack)}</div>
           <div class="stat-label">Type</div>
         </div>
       </div>

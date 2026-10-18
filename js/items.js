@@ -1,11 +1,21 @@
-(function populateTypeFilter() {
-  const typeSelect = document.getElementById("itemFilterType");
-  Object.keys(STORAGE_TYPES).forEach(function (key) {
-    const opt = document.createElement("option");
-    opt.value = key;
-    opt.textContent = STORAGE_TYPES[key].label;
-    typeSelect.appendChild(opt);
+let itemFilterTypeValue = "all";
+
+function itemTypeFilterOptions() {
+  return [{ value: "all", label: "All Types" }]
+    .concat(rackTypeFilterOptions())
+    .concat([{ value: "unassigned", label: "Unassigned" }]);
+}
+
+(function initTypeFilter() {
+  const input = document.getElementById("itemFilterTypeSearch");
+  const dropdown = document.getElementById("itemFilterTypeDropdown");
+  if (!input || !dropdown) return;
+  createSearchableSelect(input, dropdown, itemTypeFilterOptions, function (value) {
+    itemFilterTypeValue = value;
+    itemCurrentPage = 1;
+    applyItemFilters();
   });
+  input.value = "All Types";
 })();
 
 let showArchive = false;
@@ -33,9 +43,9 @@ function buildUnifiedRows() {
   const legacy = collectAllItemEntries().map(function (e) {
     return {
       kind: "legacy", id: "—", name: e.item.name, quantity: e.item.quantity,
-      tags: [], remarks: "", images: [], status: "in_store",
+      tags: [], remarks: "", images: [], status: "in_store", createdAt: e.item.createdAt || 0,
       rack: e.rack, rackId: e.rack.id, path: e.path, storageLabel: e.rack.name,
-      typeLabel: typeInfo(e.rack.type).label, statusLabel: ITEM_STATUS_LABELS.in_store,
+      typeLabel: rackTypeLabel(e.rack), statusLabel: ITEM_STATUS_LABELS.in_store,
     };
   });
   const global = globalItems.map(function (it) {
@@ -43,9 +53,10 @@ function buildUnifiedRows() {
     const status = it.status || "in_store";
     return {
       kind: "global", raw: it, id: it.id, name: it.name, quantity: it.quantity,
-      tags: it.tags || [], remarks: it.remarks || "", images: it.images || [], status: status,
+      tags: it.tags || [], remarks: it.remarks || "", images: it.images || [], status: status, createdAt: it.createdAt || 0,
       rack: rack, rackId: rack ? rack.id : "", path: null, storageLabel: rack ? rack.name : "Unassigned",
-      typeLabel: rack ? typeInfo(rack.type).label : "Unassigned", statusLabel: ITEM_STATUS_LABELS[status] || status,
+      typeLabel: rack ? rackTypeLabel(rack) : "Unassigned",
+      statusLabel: rack ? (ITEM_STATUS_LABELS[status] || status) : (status === "removed" ? "Removed" : "Unassigned"),
     };
   });
   return legacy.concat(global);
@@ -90,9 +101,9 @@ function buildItemTableRow(entry) {
     <td data-label="Item">${nameHtml}</td>
     <td data-label="Storage">${entry.rack ? `<a href="${rackDetailUrl(entry.rack.id)}" class="rack-id-badge">${escapeHtml(entry.rack.id)}</a> ` : ""}${locText}</td>
     <td data-label="Tags">${tagsCellHtml}</td>
-    <td data-label="Type">${entry.rack ? `<a href="${rackDetailUrl(entry.rack.id)}" title="Go to ${escapeHtml(entry.rack.name)}">${typeBadgeHtml(entry.rack.type)}</a>` : `<span class="type-badge">Unassigned</span>`}</td>
+    <td data-label="Type">${entry.rack ? `<a href="${rackDetailUrl(entry.rack.id)}" title="Go to ${escapeHtml(entry.rack.name)}">${typeBadgeHtml(entry.rack)}</a>` : `<span class="type-badge">Unassigned</span>`}</td>
     <td data-label="Status">${entry.kind === "global" && !showArchive
-      ? `<button type="button" class="status-picker-btn" title="Move or change status">${itemStatusBadgeHtml(entry.status)}</button>`
+      ? `<button type="button" class="status-picker-btn" title="Move or change status">${itemStatusBadgeHtml(entry.status, !entry.rack)}</button>`
       : entry.kind === "global" ? itemStatusBadgeHtml(entry.status) : "—"}</td>
     <td data-label="Qty"><strong>${entry.quantity}</strong></td>
     <td data-label="Actions">${actionsHtml || "—"}</td>
@@ -159,7 +170,7 @@ function syncItemSortIndicators() {
 
 function applyItemFilters() {
   const query = document.getElementById("itemFilterSearch").value.trim().toLowerCase();
-  const typeFilter = document.getElementById("itemFilterType").value;
+  const typeFilter = itemFilterTypeValue;
   const statusFilter = document.getElementById("itemFilterStatus").value;
 
   const all = buildUnifiedRows().filter(function (entry) {
@@ -176,7 +187,8 @@ function applyItemFilters() {
       entry.tags.some(function (t) { return t.toLowerCase().indexOf(query) !== -1; }) ||
       entry.remarks.toLowerCase().indexOf(query) !== -1 ||
       (entry.path || "").toLowerCase().indexOf(query) !== -1;
-    const matchesType = typeFilter === "all" || (entry.rack && entry.rack.type === typeFilter);
+    const matchesType = typeFilter === "all" ||
+      (typeFilter === "unassigned" ? !entry.rack : (entry.rack && rackTypeKey(entry.rack) === typeFilter));
     const matchesStatus = statusFilter === "all" || entry.status === statusFilter;
     return matchesQuery && matchesType && matchesStatus;
   });
@@ -229,12 +241,23 @@ document.querySelectorAll(".log-table th[data-sort]").forEach(function (th) {
 });
 
 document.getElementById("itemFilterSearch").addEventListener("input", function () { itemCurrentPage = 1; applyItemFilters(); });
-document.getElementById("itemFilterType").addEventListener("change", function () { itemCurrentPage = 1; applyItemFilters(); });
 document.getElementById("itemFilterStatus").addEventListener("change", function () { itemCurrentPage = 1; applyItemFilters(); });
+document.getElementById("itemFilterSort").addEventListener("change", function () {
+  const [field, dir] = this.value.split("-");
+  itemSortField = field;
+  itemSortDir = dir;
+  itemCurrentPage = 1;
+  applyItemFilters();
+});
 document.getElementById("itemFilterReset").addEventListener("click", function () {
   document.getElementById("itemFilterSearch").value = "";
-  document.getElementById("itemFilterType").value = "all";
+  const typeSearchInput = document.getElementById("itemFilterTypeSearch");
+  if (typeSearchInput) typeSearchInput.value = "All Types";
+  itemFilterTypeValue = "all";
   document.getElementById("itemFilterStatus").value = "all";
+  document.getElementById("itemFilterSort").value = "name-asc";
+  itemSortField = "name";
+  itemSortDir = "asc";
   itemCurrentPage = 1;
   applyItemFilters();
 });

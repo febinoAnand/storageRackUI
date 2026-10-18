@@ -1,11 +1,21 @@
-(function populateRackFilter() {
-  const select = document.getElementById("logFilterRack");
-  racks.forEach(function (rack) {
-    const opt = document.createElement("option");
-    opt.value = rack.id;
-    opt.textContent = `${rack.name} (${rack.id})`;
-    select.appendChild(opt);
+let logFilterRackValue = "all";
+
+function logRackFilterOptions() {
+  return [{ value: "all", label: "All Storages" }].concat(racks.map(function (rack) {
+    return { value: rack.id, label: `${rack.name} (${rack.id})` };
+  }));
+}
+
+(function initRackFilter() {
+  const input = document.getElementById("logFilterRackSearch");
+  const dropdown = document.getElementById("logFilterRackDropdown");
+  if (!input || !dropdown) return;
+  createSearchableSelect(input, dropdown, logRackFilterOptions, function (value) {
+    logFilterRackValue = value;
+    logCurrentPage = 1;
+    applyLogFilters();
   });
+  input.value = "All Storages";
 })();
 
 const LOG_PAGE_SIZE = 10;
@@ -74,7 +84,7 @@ function syncSortIndicators() {
 function applyLogFilters() {
   const query = document.getElementById("logFilterSearch").value.trim().toLowerCase();
   const typeFilter = document.getElementById("logFilterType").value;
-  const rackFilter = document.getElementById("logFilterRack").value;
+  const rackFilter = logFilterRackValue;
   const fromVal = document.getElementById("logFilterFrom").value;
   const toVal = document.getElementById("logFilterTo").value;
   const fromTs = fromVal ? new Date(fromVal + "T00:00:00").getTime() : null;
@@ -140,13 +150,14 @@ document.querySelectorAll(".log-table th[data-sort]").forEach(function (th) {
 
 document.getElementById("logFilterSearch").addEventListener("input", function () { logCurrentPage = 1; applyLogFilters(); });
 document.getElementById("logFilterType").addEventListener("change", function () { logCurrentPage = 1; applyLogFilters(); });
-document.getElementById("logFilterRack").addEventListener("change", function () { logCurrentPage = 1; applyLogFilters(); });
 document.getElementById("logFilterFrom").addEventListener("change", function () { logCurrentPage = 1; applyLogFilters(); });
 document.getElementById("logFilterTo").addEventListener("change", function () { logCurrentPage = 1; applyLogFilters(); });
 document.getElementById("logFilterReset").addEventListener("click", function () {
   document.getElementById("logFilterSearch").value = "";
   document.getElementById("logFilterType").value = "all";
-  document.getElementById("logFilterRack").value = "all";
+  const rackSearchInput = document.getElementById("logFilterRackSearch");
+  if (rackSearchInput) rackSearchInput.value = "All Storages";
+  logFilterRackValue = "all";
   document.getElementById("logFilterFrom").value = "";
   document.getElementById("logFilterTo").value = "";
   logCurrentPage = 1;
